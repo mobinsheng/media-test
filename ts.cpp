@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
+#include "bitreader.h"
 
 
 #define ELEMENTS 10
@@ -36,7 +37,7 @@ bool ParsePAT(TS* ts, BitReader* reader){
     ts->pat.section_length = get_bits(reader, 12);
 
     LOG("  section_length = %u\n", ts->pat.section_length);
-    ts->pat.transport_stream_id = get_bits(reader, 16);
+    ts->pat.transport_stream_id = get_bits(reader,16);//get_bits(reader, 16);
 
     LOG("  transport_stream_id = %u\n", ts->pat.transport_stream_id);
     ts->pat.reserved2 = get_bits(reader, 2);
@@ -190,6 +191,41 @@ bool ParseProgramMap(TS* ts, TSProgram *program, BitReader* reader){
     printf("****** PROGRAM MAP *****\n");
 }
 
+TSStream *GetStreamByPID(TSProgram *program, uint32_t pid){
+
+    for(int i = 0; i < program->streams.size(); ++i){
+        TSStream* stream = program->streams[i];
+        if(stream == NULL){
+            continue;
+        }
+        if(stream->elementary_pid != pid){
+            continue;
+        }
+
+        return stream;
+    }
+    return NULL;
+}
+
+TSProgram *GetProgramByPID(TS *ts, uint32_t pid){
+    for(int i = 0; i < ts->programs.size(); ++i){
+        TSProgram *program = ts->programs[i];
+        if(program != NULL && program->program_map_pid == pid){
+            return program;
+        }
+    }
+    return NULL;
+}
+
+void AddStream(TSProgram *program, uint32_t elementaryPID, uint32_t streamType){
+    TSStream* stream = new TSStream;
+    stream->program = program;
+    stream->elementary_pid = elementaryPID;
+    stream->stream_type = streamType;
+    program->streams.push_back(stream);
+}
+
+
 bool ParsePayload(TS* ts,BitReader* reader,uint32_t pid, uint32_t payload_unit_start_indicator){
     int handle = 0;
     if(pid == 0){
@@ -228,6 +264,184 @@ bool ParsePayload(TS* ts,BitReader* reader,uint32_t pid, uint32_t payload_unit_s
         LOG("PID 0x%04x not handled.\n", pid);
     }
     return ret;
+}
+
+bool ParseStream(TSStream *stream, uint32_t payload_unit_start_indicator, BitReader* reader){
+    size_t payloadSizeBits;
+
+    if(payload_unit_start_indicator)
+    {
+        if(stream->payload_started)
+        {
+            FlushStreamData(stream);
+        }
+        stream->payload_started = 1;
+    }
+
+    if(!stream->payload_started)
+    {
+        return false;
+    }
+
+    payloadSizeBits = bitreader_size(reader);
+
+    memcpy(stream->buffer + stream->buffer_size, bitreader_data(reader), payloadSizeBits / 8);
+    stream->buffer_size += (payloadSizeBits / 8);
+}
+
+bool ParsePES(TSStream *stream, BitReader* reader){
+    uint32_t packet_startcode_prefix = get_bits(reader, 24);
+    uint32_t stream_id = get_bits(reader, 8);
+    uint32_t PES_packet_length = get_bits(reader, 16);
+
+    if (stream_id != 0xbc  // program_stream_map
+            && stream_id != 0xbe  // padding_stream
+            && stream_id != 0xbf  // private_stream_2
+            && stream_id != 0xf0  // ECM
+            && stream_id != 0xf1  // EMM
+            && stream_id != 0xff  // program_stream_directory
+            && stream_id != 0xf2  // DSMCC
+            && stream_id != 0xf8)   // H.222.1 type E
+    {
+        uint32_t PTS_DTS_flags;
+        uint32_t ESCR_flag;
+        uint32_t ES_rate_flag;
+        uint32_t DSM_trick_mode_flag;
+        uint32_t additional_copy_info_flag;
+        uint32_t PES_header_data_length;
+        uint32_t optional_bytes_remaining;
+        uint64_t PTS = 0, DTS = 0;
+
+        skip_bits(reader, 8);
+
+        PTS_DTS_flags = get_bits(reader, 2);
+        ESCR_flag = get_bits(reader, 1);
+        ES_rate_flag = get_bits(reader, 1);
+        DSM_trick_mode_flag = get_bits(reader, 1);
+        additional_copy_info_flag = get_bits(reader, 1);
+
+        skip_bits(reader, 2);
+
+        PES_header_data_length = get_bits(reader, 8);
+        optional_bytes_remaining = PES_header_data_length;
+
+        if (PTS_DTS_flags == 2 || PTS_DTS_flags == 3)
+        {
+            skip_bits(reader, 4);
+            PTS = ParseTSTimestamp(reader);
+            skip_bits(reader, 1);
+
+            optional_bytes_remaining -= 5;
+
+            if (PTS_DTS_flags == 3)
+            {
+                skip_bits(reader, 4);
+
+                DTS = ParseTSTimestamp(reader);
+                skip_bits(reader, 1);
+
+                optional_bytes_remaining -= 5;
+            }
+        }
+
+        if (ESCR_flag)
+        {
+            skip_bits(reader, 2);
+
+            uint64_t ESCR = ParseTSTimestamp(reader);
+
+            skip_bits(reader, 11);
+
+            optional_bytes_remaining -= 6;
+        }
+
+        if (ES_rate_flag)
+        {
+            skip_bits(reader, 24);
+            optional_bytes_remaining -= 3;
+        }
+
+        skip_bits(reader, optional_bytes_remaining * 8);
+
+        // ES data follows.
+        if (PES_packet_length != 0)
+        {
+            uint32_t dataLength = PES_packet_length - 3 - PES_header_data_length;
+
+            // Signaling we have payload data
+            OnPayloadData(stream, PTS_DTS_flags, PTS, DTS, (uint8_t*)bitreader_data(reader), dataLength);
+
+            skip_bits(reader, dataLength * 8);
+        }
+        else
+        {
+            size_t payloadSizeBits;
+            // Signaling we have payload data
+            OnPayloadData(stream, PTS_DTS_flags, PTS, DTS, (uint8_t*)bitreader_data(reader), bitreader_size(reader) / 8);
+
+            payloadSizeBits = bitreader_size(reader);
+        }
+    }
+    else if (stream_id == 0xbe)
+    {  // padding_stream
+        skip_bits(reader, PES_packet_length * 8);
+    }
+    else
+    {
+        skip_bits(reader, PES_packet_length * 8);
+    }
+}
+
+int64_t ParseTSTimestamp(BitReader* reader){
+    int64_t result = ((uint64_t)get_bits(reader, 3)) << 30;
+    skip_bits(reader, 1);
+    result |= ((uint64_t)get_bits(reader, 15)) << 15;
+    skip_bits(reader, 1);
+    result |= get_bits(reader, 15);
+
+    return result;
+}
+
+void FlushStreamData(TSStream *stream){
+    BitReader reader;
+    bitreader_init(&reader, (uint8_t *)stream->buffer, stream->buffer_size);
+
+    ParsePES(stream, &reader);
+
+    stream->buffer_size = 0;
+}
+
+// convert PTS to timestamp
+int64_t convertPTSToTimestamp(TSStream *stream, uint64_t PTS)
+{
+    if (!stream->program->first_pts_valid)
+    {
+        stream->program->first_pts_valid = 1;
+        stream->program->first_pts = PTS;
+        PTS = 0;
+    }
+    else if (PTS < stream->program->first_pts)
+    {
+        PTS = 0;
+    }
+    else
+    {
+        PTS -= stream->program->first_pts;
+    }
+
+    return (PTS * 100) / 9;
+}
+
+void OnPayloadData(TSStream *stream, uint32_t PTS_DTS_flag, uint64_t PTS, uint64_t DTS, uint8_t *data, size_t size){
+    int64_t timeUs = convertPTSToTimestamp(stream, PTS);
+    if(stream->stream_type == TS_STREAM_VIDEO)
+    {
+        printf("Payload Data!!!! Video (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
+    }
+    else if(stream->stream_type == TS_STREAM_AUDIO)
+    {
+        printf("Payload Data!!!! Audio (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
+    }
 }
 
 bool ParsePacket(TS* ts,BitReader* reader){

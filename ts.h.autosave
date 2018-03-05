@@ -86,7 +86,15 @@ struct PMT{ // program map table
 };
 
 struct PESOptional{
-
+    uint32_t PTS_DTS_flags;
+    uint32_t ESCR_flag;
+    uint32_t ES_rate_flag;
+    uint32_t DSM_trick_mode_flag;
+    uint32_t additional_copy_info_flag;
+    uint32_t PES_header_data_length;
+    uint32_t optional_bytes_remaining;
+    uint64_t PTS = 0;
+    uint64_t DTS = 0;
 };
 
 struct PES{

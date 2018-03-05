@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C"{
+#endif
 typedef struct BitReader{
   const uint8_t *data;
   uint32_t size;
@@ -34,4 +37,7 @@ uint32_t bitreader_size(BitReader *reader);
  */
 const uint8_t* bitreader_data(BitReader *reader);
 
+#ifdef __cplusplus
+}
+#endif
 #endif
