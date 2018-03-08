@@ -10,235 +10,231 @@
 #define ELEMENTS 10
 
 
+#define LOG printf
+//#define LOG(format,...) //printf(format,__VA_ARGS__)
 
-#define LOG(format,...) printf(format,__VA_ARGS__)
+static void OnPayloadData(TSStream *stream, uint32_t PTS_DTS_flag, uint64_t PTS, uint64_t DTS, uint8_t *data, size_t size);
 
-bool ParseAdaptionField(TS* ts,BitReader* reader){
-    uint32_t adaptation_field_length = get_bits(reader, 8);
-    if (adaptation_field_length > 0)
+void DumpPAT(PAT& pat){
+
+    LOG("  table_id = %u\n", pat.table_id);
+    LOG("  section_syntax_indicator = %u\n", pat.section_syntax_indicator);
+    LOG("  reserved = %u\n", pat.reserved);
+    LOG("  section_length = %u\n", pat.section_length);
+    LOG("  transport_stream_id = %u\n", pat.transport_stream_id);
+    LOG("  reserved2 = %u\n", pat.reserved2);
+    LOG("  version_number = %u\n", pat.version_number);
+    LOG("  current_next_indicator = %u\n", pat.current_next_indicator);
+    LOG("  section_number = %u\n", pat.section_number);
+    LOG("  last_section_number = %u\n", pat.last_section_number);
+    for (size_t i = 0; i < pat.nloops.size(); ++i)
     {
-        skip_bits(reader, adaptation_field_length * 8);
+        PATLoopInfo* info = pat.nloops[i];
+        LOG("    program_number = %u\n", info->program_number);
+        LOG("    reserved = %u\n", info->reserved);
+        LOG("    PID = 0x%04x\n", info->pid);
     }
+    LOG("  CRC = 0x%08x\n", pat.crc);
 }
 
-bool ParsePAT(TS* ts, BitReader* reader){
+void DumpPMT(PMT& pmt){
+
+    LOG("****** PROGRAM MAP *****\n");
+    LOG("	table_id = %u\n", pmt.table_id);
+    LOG("	section_syntax_indicator = %u\n", pmt.section_syntax_indicator);
+    LOG("  section_length = %u\n", pmt.section_length);
+    LOG("  program_number = %u\n", pmt.program_number);
+    LOG("  reserved = %u\n", pmt.reserved2);
+    LOG("  version_number = %u\n", pmt.version_number);
+    LOG("  current_next_indicator = %u\n", pmt.current_next_indicator);
+    LOG("  section_number = %u\n", pmt.section_number);
+    LOG("  last_section_number = %u\n", pmt.last_section_number);
+    LOG("  reserved = %u\n", pmt.reserved3);
+    LOG("  PCR_PID = 0x%04x\n", pmt.PCR_PID);
+    LOG("  reserved = %u\n", pmt.reserved4);
+    LOG("  program_info_length = %u\n", pmt.program_info_length);
+    size_t i = 0;
+    for (i = 0; i < pmt.nloops.size();++i)
+    {
+        PMTLoopInfo* info = pmt.nloops[i];
+        LOG("    stream_type = 0x%02x\n", info->stream_type);
+        LOG("    reserved = %u\n", info->reserved);
+        LOG("    elementary_PID = 0x%04x\n", info->elementary_pid);
+        LOG("    reserved = %u\n", info->reserved2);
+        LOG("    ES_info_length = %u\n", info->es_info_lenght);
+    }
+    LOG("  CRC = 0x%08x\n", pmt.crc);
+    LOG("****** PROGRAM MAP *****\n");
+}
+
+bool DumpPacket(TSPacket* packet){
+    LOG("-----Packet Head begin-----\n");
+    LOG("Payload unit start indicator: %u\n", packet->payload_unit_start_indicator);
+    LOG("Transport Priority: %u\n", packet->transport_priority);
+    LOG("PID: 0x%04x\n", packet->pid);
+    LOG("Transport Scrambling Control: %u\n", packet->transport_scrambling_control);
+    LOG("Adaptation field control: %u\n", packet->adaptation_field_control);
+    LOG("Continuity Counter: %u\n", packet->continuity_counter);
+    LOG("Continuity Counter: %u\n", packet->continuity_counter);
+    LOG("-----Packet Head end-----\n");
+}
+
+bool TSParser::parse_adaption_field(BitReader* reader,TSPacket* packet){
+    AdaptationField* af = &packet->adaptation_field;
+    af->adaptation_field_length = get_bits(reader, 8);
+    int bits = af->adaptation_field_length * 8;
+    /*if(af->adaptation_field_length < 0){
+        return true;
+    }
+    af->discontinuity_indicator = get_bits(reader,1);
+    af->random_access_indicator = get_bits(reader,1);
+    af->elementary_stream_priority_indicator = get_bits(reader,1);
+    af->PCR_flag = get_bits(reader,1);
+    af->OPCR_flag = get_bits(reader,1);
+    af->splicing_point_flag = get_bits(reader,1);
+    af->transport_private_data_flag = get_bits(reader,1);
+    af->adaptation_field_extension_flag = get_bits(reader,1);
+
+    bits -= (1+1+1+1+1+1+1+1);
+
+    if(bits >= 48){
+        int64_t base = get_bits(reader,33);
+        bits -= 33;
+        skip_bits(reader,6);
+        int64_t extension = get_bits(reader,9);
+        af->PCR = base * 300 + extension;
+    }
+
+    if(bits >= 48){
+        af->OPCR = get_bits(reader,48);
+        bits -= 48;
+    }
+
+    if(bits >= 8){
+        af->splice_countdown = get_bits(reader,8);
+        bits -= 8;
+    }*/
+
+    skip_bits(reader,bits);
+}
+
+bool TSParser::parse_pat(BitReader* reader){
     size_t i;
 
-    ts->pat.table_id = get_bits(reader, 8);
-    LOG("  table_id = %u\n", ts->pat.table_id);
+    pat.table_id = get_bits(reader, 8);
+    pat.section_syntax_indicator = get_bits(reader, 1);
+    pat.zero_byte = get_bits(reader, 1);
+    pat.reserved = get_bits(reader, 2);
+    pat.section_length = get_bits(reader, 12);
+    pat.transport_stream_id = get_bits(reader,16);//get_bits(reader, 16);
+    pat.reserved2 = get_bits(reader, 2);
+    pat.version_number = get_bits(reader, 5);
+    pat.current_next_indicator = get_bits(reader, 1);
+    pat.section_number = get_bits(reader, 8);
+    pat.last_section_number = get_bits(reader, 8);
 
-    ts->pat.section_syntax_indicator = get_bits(reader, 1);
-    LOG("  section_syntax_indicator = %u\n", ts->pat.section_syntax_indicator);
-
-    ts->pat.zero_byte = get_bits(reader, 1);
-    ts->pat.reserved = get_bits(reader, 2);
-
-    LOG("  reserved = %u\n", ts->pat.reserved);
-    ts->pat.section_length = get_bits(reader, 12);
-
-    LOG("  section_length = %u\n", ts->pat.section_length);
-    ts->pat.transport_stream_id = get_bits(reader,16);//get_bits(reader, 16);
-
-    LOG("  transport_stream_id = %u\n", ts->pat.transport_stream_id);
-    ts->pat.reserved2 = get_bits(reader, 2);
-
-    LOG("  reserved2 = %u\n", ts->pat.reserved2);
-    ts->pat.version_number = get_bits(reader, 5);
-
-    LOG("  version_number = %u\n", ts->pat.version_number);
-    ts->pat.current_next_indicator = get_bits(reader, 1);
-
-    LOG("  current_next_indicator = %u\n", ts->pat.current_next_indicator);
-    ts->pat.section_number = get_bits(reader, 8);
-
-    LOG("  section_number = %u\n", ts->pat.section_number);
-    ts->pat.last_section_number = get_bits(reader, 8);
-
-    LOG("  last_section_number = %u\n", ts->pat.last_section_number);
-
-    size_t numProgramBytes = (ts->pat.section_length - 5 /* header */ - 4 /* crc */);
-    LOG("  numProgramBytes = %ld\n", numProgramBytes);
+    size_t numProgramBytes = (pat.section_length - 5 /* header */ - 4 /* crc */);
 
     for (i = 0; i < numProgramBytes / 4; ++i)
     {
         PATLoopInfo* info = new PATLoopInfo;
+        pat.nloops.push_back(info);
         info->program_number = get_bits(reader, 16);
-        LOG("    program_number = %u\n", info->program_number);
         info->reserved = get_bits(reader, 3);
-        LOG("    reserved = %u\n", info->reserved);
-
         info->pid = get_bits(reader, 13);
         if (info->program_number == 0)
         {
-            LOG("    network_PID = 0x%04x\n", info->pid);
+			// 网络pid相关，这里不处理
         }
         else
         {
+			// pat里面包含了PMT（program map table）的信息
             unsigned programMapPID = info->pid;
-            LOG("    program_map_PID = 0x%04x\n", programMapPID);
-
-            AddProgram(ts, programMapPID);
+            // 新增一个program
+            add_program(programMapPID);
         }
     }
 
-    ts->pat.crc = get_bits(reader, 32);
-    LOG("  CRC = 0x%08x\n", ts->pat.crc);
+    pat.crc = get_bits(reader, 32);
+    //LOG("-----PAT Head begin-----\n");
+    //DumpPAT(pat);
+    //LOG("-----PAT Head end-----\n");
 }
 
-void AddProgram(TS *ts, uint32_t programMapPID){
-    TSProgram* program = new TSProgram;
-    program->program_map_pid = programMapPID;
-    ts->programs.push_back(program);
-}
+bool TSParser::parse_pmt(TSProgram *program, BitReader* reader){
+    pmt.table_id = get_bits(reader, 8);
+    pmt.section_syntax_indicator = get_bits(reader, 1);
+    pmt.zero_byte = get_bits(reader,1);
+    pmt.reserved = get_bits(reader,2);
+    pmt.section_length = get_bits(reader, 12);
+    pmt.program_number = get_bits(reader, 16);
+    pmt.reserved2 = get_bits(reader, 2);
+    pmt.version_number = get_bits(reader, 5);
+    pmt.current_next_indicator = get_bits(reader, 1);
+    pmt.section_number = get_bits(reader, 8);
+    pmt.last_section_number = get_bits(reader, 8);
+    pmt.reserved3 = get_bits(reader, 3);
+    pmt.PCR_PID = get_bits(reader, 13);
+    pmt.reserved4 = get_bits(reader, 4);
+    pmt.program_info_length = get_bits(reader, 12);
 
-bool ParseProgramMap(TS* ts, TSProgram *program, BitReader* reader){
-    ts->pmt.table_id = get_bits(reader, 8);
-
-    printf("****** PROGRAM MAP *****\n");
-    printf("	table_id = %u\n", ts->pmt.table_id);
-
-    ts->pmt.section_syntax_indicator = get_bits(reader, 1);
-    printf("	section_syntax_indicator = %u\n", ts->pmt.section_syntax_indicator);
-
-    // Reserved
-    ts->pmt.zero_byte = get_bits(reader,1);
-    ts->pmt.reserved = get_bits(reader,2);
-
-
-    ts->pmt.section_length = get_bits(reader, 12);
-    printf("  section_length = %u\n", ts->pmt.section_length);
-
-    ts->pmt.program_number = get_bits(reader, 16);
-    printf("  program_number = %u\n", ts->pmt.program_number);
-
-    ts->pmt.reserved2 = get_bits(reader, 2);
-    printf("  reserved = %u\n", ts->pmt.reserved2);
-
-    ts->pmt.version_number = get_bits(reader, 5);
-    printf("  version_number = %u\n", ts->pmt.version_number);
-
-    ts->pmt.current_next_indicator = get_bits(reader, 1);
-    printf("  current_next_indicator = %u\n", ts->pmt.current_next_indicator);
-
-    ts->pmt.section_number = get_bits(reader, 8);
-    printf("  section_number = %u\n", ts->pmt.section_number);
-
-    ts->pmt.last_section_number = get_bits(reader, 8);
-    printf("  last_section_number = %u\n", ts->pmt.last_section_number);
-
-    ts->pmt.reserved3 = get_bits(reader, 3);
-    printf("  reserved = %u\n", ts->pmt.reserved3);
-
-    ts->pmt.PCR_PID = get_bits(reader, 13);
-    printf("  PCR_PID = 0x%04x\n", ts->pmt.PCR_PID);
-
-    ts->pmt.reserved4 = get_bits(reader, 4);
-    printf("  reserved = %u\n", ts->pmt.reserved4);
-
-    ts->pmt.program_info_length = get_bits(reader, 12);
-    printf("  program_info_length = %u\n", ts->pmt.program_info_length);
-
-
-    skip_bits(reader, ts->pmt.program_info_length * 8);  // skip descriptors
+    skip_bits(reader, pmt.program_info_length * 8);  // skip descriptors
 
     // infoBytesRemaining is the number of bytes that make up the
     // variable length section of ES_infos. It does not include the
     // final CRC.
-    size_t infoBytesRemaining = ts->pmt.section_length - 9 - ts->pmt.program_info_length - 4;
+    size_t infoBytesRemaining = pmt.section_length - 9 - pmt.program_info_length - 4;
 
     while (infoBytesRemaining > 0)
     {
         PMTLoopInfo* info = new PMTLoopInfo;
-
+        pmt.nloops.push_back(info);
         info->stream_type = get_bits(reader, 8);
-        printf("    stream_type = 0x%02x\n", info->stream_type);
-
         info->reserved = get_bits(reader, 3);
-        printf("    reserved = %u\n", info->reserved);
-
         info->elementary_pid = get_bits(reader, 13);
-        printf("    elementary_PID = 0x%04x\n", info->elementary_pid);
-
         info->reserved2 = get_bits(reader, 4);
-        printf("    reserved = %u\n", info->reserved2);
-
         info->es_info_lenght = get_bits(reader, 12);
-        printf("    ES_info_length = %u\n", info->es_info_lenght);
-
-        size_t info_bytes_remaining = info->es_info_lenght;
+        int info_bytes_remaining = info->es_info_lenght;
         while (info_bytes_remaining >= 2)
         {
             uint32_t descLength;
-            printf("      tag = 0x%02x\n", get_bits(reader, 8));
-
             descLength = get_bits(reader, 8);
-            printf("      len = %u\n", descLength);
-
             skip_bits(reader, descLength * 8);
-
             info_bytes_remaining -= descLength + 2;
         }
 
-        if(GetStreamByPID(program, info->elementary_pid) == NULL)
-            AddStream(program, info->elementary_pid, info->stream_type);
+        if(program->find_stream(info->elementary_pid) == NULL)
+            program->add_stream(info->elementary_pid, info->stream_type);
 
         infoBytesRemaining -= 5 + info->es_info_lenght;
-        ts->pmt.nloops.push_back(info);
     }
 
-    ts->pmt.crc = get_bits(reader, 32);
-    printf("  CRC = 0x%08x\n", ts->pmt.crc);
-    printf("****** PROGRAM MAP *****\n");
+    pmt.crc = get_bits(reader, 32);
+    //LOG("-----PMT Head begin-----\n");
+    //DumpPMT(pmt);
+    //LOG("-----PMT Head end-----\n");
 }
 
-TSStream *GetStreamByPID(TSProgram *program, uint32_t pid){
-
-    for(int i = 0; i < program->streams.size(); ++i){
-        TSStream* stream = program->streams[i];
-        if(stream == NULL){
-            continue;
-        }
-        if(stream->elementary_pid != pid){
-            continue;
-        }
-
-        return stream;
-    }
-    return NULL;
-}
-
-TSProgram *GetProgramByPID(TS *ts, uint32_t pid){
-    for(int i = 0; i < ts->programs.size(); ++i){
-        TSProgram *program = ts->programs[i];
-        if(program != NULL && program->program_map_pid == pid){
-            return program;
-        }
-    }
-    return NULL;
-}
-
-void AddStream(TSProgram *program, uint32_t elementaryPID, uint32_t streamType){
-    TSStream* stream = new TSStream;
-    stream->program = program;
-    stream->elementary_pid = elementaryPID;
-    stream->stream_type = streamType;
-    program->streams.push_back(stream);
-}
-
-
-bool ParsePayload(TS* ts,BitReader* reader,uint32_t pid, uint32_t payload_unit_start_indicator){
+bool TSParser::parse_payload(BitReader* reader,uint32_t pid, uint32_t payload_unit_start_indicator){
     int handle = 0;
+    // pid等于0表示出现pat
     if(pid == 0){
+		/*
+         * payload_unit_start_indicator，
+         * 但是当前是PSI（pat、pmt等）信息，因此要跳过一些字节（用于调整）
+		 */ 
         if(payload_unit_start_indicator){
             uint32_t skips = get_bits(reader,8);
             skip_bits(reader,skips * 8);
         }
-        return ParsePAT(ts,reader);
+
+        return parse_pat(reader);
     }
 
+	// pid不等于0,意味着明确地指定了一个program，那么应该找到对应的program
     bool ret = false;
-    for(int i = 0; i < ts->programs.size(); ++i){
-        TSProgram* program = ts->programs[i];
+    for(int i = 0; i < programs.size(); ++i){
+        TSProgram* program = programs[i];
         if(program == NULL){
             continue;
         }
@@ -248,16 +244,16 @@ bool ParsePayload(TS* ts,BitReader* reader,uint32_t pid, uint32_t payload_unit_s
                 uint32_t skips = get_bits(reader,8);
                 skip_bits(reader,skips * 8);
             }
-            ret = ParseProgramMap(ts,program,reader);
+            ret = parse_pmt(program,reader);
             handle = 1;
             break;
         }
         else{
-            TSStream* stream = GetStreamByPID(program,pid);
+            TSStream* stream = program->find_stream(pid);
             if(stream == NULL){
                 continue;
             }
-            ret = ParseStream(stream,payload_unit_start_indicator,reader);
+            ret = parse_stream(stream,payload_unit_start_indicator,reader);
         }
     }
     if(!handle){
@@ -266,14 +262,14 @@ bool ParsePayload(TS* ts,BitReader* reader,uint32_t pid, uint32_t payload_unit_s
     return ret;
 }
 
-bool ParseStream(TSStream *stream, uint32_t payload_unit_start_indicator, BitReader* reader){
+bool TSParser::parse_stream(TSStream *stream, uint32_t payload_unit_start_indicator, BitReader* reader){
     size_t payloadSizeBits;
-
+    // 出现新的PES
     if(payload_unit_start_indicator)
     {
         if(stream->payload_started)
         {
-            FlushStreamData(stream);
+            flush_stream_data(stream);
         }
         stream->payload_started = 1;
     }
@@ -285,14 +281,16 @@ bool ParseStream(TSStream *stream, uint32_t payload_unit_start_indicator, BitRea
 
     payloadSizeBits = bitreader_size(reader);
 
-    memcpy(stream->buffer + stream->buffer_size, bitreader_data(reader), payloadSizeBits / 8);
-    stream->buffer_size += (payloadSizeBits / 8);
+    stream->push_data(bitreader_data(reader), payloadSizeBits / 8);
 }
 
-bool ParsePES(TSStream *stream, BitReader* reader){
-    uint32_t packet_startcode_prefix = get_bits(reader, 24);
-    uint32_t stream_id = get_bits(reader, 8);
-    uint32_t PES_packet_length = get_bits(reader, 16);
+bool TSParser::parse_pes(TSStream *stream, BitReader* reader){
+    PES pes;
+    pes.packet_startcode_prefix = get_bits(reader, 24);
+    pes.stream_id = get_bits(reader, 8);
+    pes.PES_packet_length = get_bits(reader, 16);
+
+    uint32_t stream_id = pes.stream_id;
 
     if (stream_id != 0xbc  // program_stream_map
             && stream_id != 0xbe  // padding_stream
@@ -303,73 +301,91 @@ bool ParsePES(TSStream *stream, BitReader* reader){
             && stream_id != 0xf2  // DSMCC
             && stream_id != 0xf8)   // H.222.1 type E
     {
-        uint32_t PTS_DTS_flags;
-        uint32_t ESCR_flag;
-        uint32_t ES_rate_flag;
-        uint32_t DSM_trick_mode_flag;
-        uint32_t additional_copy_info_flag;
-        uint32_t PES_header_data_length;
-        uint32_t optional_bytes_remaining;
-        uint64_t PTS = 0, DTS = 0;
+        skip_bits(reader, 2); // 10
+        pes.optional.PES_scrambling_control = get_bits(reader,2);
+        pes.optional.PES_priority = get_bits(reader,1);
+        pes.optional.data_alignment_indicator = get_bits(reader,1);
+        pes.optional.copyright = get_bits(reader,1);
+        pes.optional.original_or_copy = get_bits(reader,1);
 
-        skip_bits(reader, 8);
+        //skip_bits(reader, 8);
 
-        PTS_DTS_flags = get_bits(reader, 2);
-        ESCR_flag = get_bits(reader, 1);
-        ES_rate_flag = get_bits(reader, 1);
-        DSM_trick_mode_flag = get_bits(reader, 1);
-        additional_copy_info_flag = get_bits(reader, 1);
+        pes.optional.PTS_DTS_flags = get_bits(reader, 2);
+        pes.optional.ESCR_flag = get_bits(reader, 1);
+        pes.optional.ES_rate_flag = get_bits(reader, 1);
+        pes.optional.DSM_trick_mode_flag = get_bits(reader, 1);
+        pes.optional.additional_copy_info_flag = get_bits(reader, 1);
 
         skip_bits(reader, 2);
 
-        PES_header_data_length = get_bits(reader, 8);
-        optional_bytes_remaining = PES_header_data_length;
+        pes.optional.PES_header_data_length = get_bits(reader, 8);
+        pes.optional.optional_bytes_remaining = pes.optional.PES_header_data_length;
 
-        if (PTS_DTS_flags == 2 || PTS_DTS_flags == 3)
+        if (pes.optional.PTS_DTS_flags == 2 || pes.optional.PTS_DTS_flags == 3)
         {
             skip_bits(reader, 4);
-            PTS = ParseTSTimestamp(reader);
+            pes.optional.PTS = parse_timestamp(reader);
             skip_bits(reader, 1);
 
-            optional_bytes_remaining -= 5;
+            pes.optional.optional_bytes_remaining -= 5;
 
-            if (PTS_DTS_flags == 3)
+            if (pes.optional.PTS_DTS_flags == 3)
             {
                 skip_bits(reader, 4);
 
-                DTS = ParseTSTimestamp(reader);
+                pes.optional.DTS = parse_timestamp(reader);
                 skip_bits(reader, 1);
 
-                optional_bytes_remaining -= 5;
+                pes.optional.optional_bytes_remaining -= 5;
             }
         }
 
-        if (ESCR_flag)
+        if (pes.optional.ESCR_flag)
         {
             skip_bits(reader, 2);
 
-            uint64_t ESCR = ParseTSTimestamp(reader);
+            uint64_t ESCR = parse_timestamp(reader);
 
             skip_bits(reader, 11);
 
-            optional_bytes_remaining -= 6;
+            pes.optional.optional_bytes_remaining -= 6;
         }
 
-        if (ES_rate_flag)
+        if (pes.optional.ES_rate_flag)
         {
             skip_bits(reader, 24);
-            optional_bytes_remaining -= 3;
+            pes.optional.optional_bytes_remaining -= 3;
         }
 
-        skip_bits(reader, optional_bytes_remaining * 8);
+        skip_bits(reader, pes.optional.optional_bytes_remaining * 8);
 
         // ES data follows.
-        if (PES_packet_length != 0)
+        if (pes.PES_packet_length != 0)
         {
-            uint32_t dataLength = PES_packet_length - 3 - PES_header_data_length;
+            uint32_t dataLength = pes.PES_packet_length - 3 - pes.optional.PES_header_data_length;
 
             // Signaling we have payload data
-            OnPayloadData(stream, PTS_DTS_flags, PTS, DTS, (uint8_t*)bitreader_data(reader), dataLength);
+            void (*pfun)(TSStream*, uint32_t PTS_DTS_flag,
+                                       uint64_t PTS, uint64_t DTS,
+                                       uint8_t *data, size_t size);
+
+            if(unpack_data_callback){
+                unpack_data_callback(stream,
+                              pes.optional.PTS_DTS_flags,
+                              pes.optional.PTS,
+                              pes.optional.DTS,
+                              (uint8_t*)bitreader_data(reader),
+                              dataLength);
+            }
+            else{
+                OnPayloadData(stream,
+                              pes.optional.PTS_DTS_flags,
+                              pes.optional.PTS,
+                              pes.optional.DTS,
+                              (uint8_t*)bitreader_data(reader),
+                              dataLength);
+            }
+
 
             skip_bits(reader, dataLength * 8);
         }
@@ -377,22 +393,37 @@ bool ParsePES(TSStream *stream, BitReader* reader){
         {
             size_t payloadSizeBits;
             // Signaling we have payload data
-            OnPayloadData(stream, PTS_DTS_flags, PTS, DTS, (uint8_t*)bitreader_data(reader), bitreader_size(reader) / 8);
+            if(unpack_data_callback){
+                unpack_data_callback(stream,
+                              pes.optional.PTS_DTS_flags,
+                              pes.optional.PTS,
+                              pes.optional.DTS,
+                              (uint8_t*)bitreader_data(reader),
+                              bitreader_size(reader) / 8);
+            }
+            else{
+                OnPayloadData(stream,
+                              pes.optional.PTS_DTS_flags,
+                              pes.optional.PTS,
+                              pes.optional.DTS,
+                              (uint8_t*)bitreader_data(reader),
+                              bitreader_size(reader) / 8);
+            }
 
             payloadSizeBits = bitreader_size(reader);
         }
     }
     else if (stream_id == 0xbe)
     {  // padding_stream
-        skip_bits(reader, PES_packet_length * 8);
+        skip_bits(reader, pes.PES_packet_length * 8);
     }
     else
     {
-        skip_bits(reader, PES_packet_length * 8);
+        skip_bits(reader, pes.PES_packet_length * 8);
     }
 }
 
-int64_t ParseTSTimestamp(BitReader* reader){
+int64_t TSParser::parse_timestamp(BitReader* reader){
     int64_t result = ((uint64_t)get_bits(reader, 3)) << 30;
     skip_bits(reader, 1);
     result |= ((uint64_t)get_bits(reader, 15)) << 15;
@@ -402,11 +433,11 @@ int64_t ParseTSTimestamp(BitReader* reader){
     return result;
 }
 
-void FlushStreamData(TSStream *stream){
+void TSParser::flush_stream_data(TSStream *stream){
     BitReader reader;
     bitreader_init(&reader, (uint8_t *)stream->buffer, stream->buffer_size);
 
-    ParsePES(stream, &reader);
+    parse_pes(stream, &reader);
 
     stream->buffer_size = 0;
 }
@@ -432,20 +463,23 @@ int64_t convertPTSToTimestamp(TSStream *stream, uint64_t PTS)
     return (PTS * 100) / 9;
 }
 
-void OnPayloadData(TSStream *stream, uint32_t PTS_DTS_flag, uint64_t PTS, uint64_t DTS, uint8_t *data, size_t size){
+static void OnPayloadData(TSStream *stream, uint32_t PTS_DTS_flag, uint64_t PTS, uint64_t DTS, uint8_t *data, size_t size){
     int64_t timeUs = convertPTSToTimestamp(stream, PTS);
     if(stream->stream_type == TS_STREAM_VIDEO)
     {
-        printf("Payload Data!!!! Video (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
+        LOG("Payload Data!!!! Video (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
     }
     else if(stream->stream_type == TS_STREAM_AUDIO)
     {
-        printf("Payload Data!!!! Audio (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
+        LOG("Payload Data!!!! Audio (%02x), PTS: %lld, DTS:%lld, Size: %ld\n", stream->stream_type, PTS, DTS, size);
     }
 }
 
-bool ParsePacket(TS* ts,BitReader* reader){
-    TSPacket* packet = new TSPacket;
+/*
+ * parse a ts packet
+ */
+bool ParsePacket(TSParser* ts,BitReader* reader,TSPacket* packet){
+
     packet->sync_byte = get_bits(reader,8);
     if(packet->sync_byte != TS_SYNC_CODE){
         delete packet;
@@ -459,31 +493,28 @@ bool ParsePacket(TS* ts,BitReader* reader){
     }
 
     packet->payload_unit_start_indicator = get_bits(reader,1);
-    LOG("Payload unit start indicator: %u\n", packet->payload_unit_start_indicator);
 
     packet->transport_priority = get_bits(reader,1);
-    LOG("Transport Priority: %u\n", packet->transport_priority);
 
     packet->pid = get_bits(reader,13);
-    LOG("PID: 0x%04x\n", packet->pid);
 
     packet->transport_scrambling_control = get_bits(reader,2);
-    LOG("Transport Scrambling Control: %u\n", packet->transport_scrambling_control);
 
     packet->adaptation_field_control = get_bits(reader,2);
-    LOG("Adaptation field control: %u\n", packet->adaptation_field_control);
 
     packet->continuity_counter = get_bits(reader,4);
-    LOG("Continuity Counter: %u\n", packet->continuity_counter);
+
+    DumpPacket(packet);
 
     bool ret = false;
     if(packet->adaptation_field_control == 2 || packet->adaptation_field_control == 3){
-        ret = ParseAdaptionField(ts,reader);
+        ret = ts->parse_adaption_field(reader,packet);
     }
 
     if(packet->adaptation_field_control == 1 || packet->adaptation_field_control == 3){
-        ret = ParsePayload(ts,reader,packet->pid,packet->payload_unit_start_indicator);
+        ret = ts->parse_payload(reader,packet->pid,packet->payload_unit_start_indicator);
     }
-    delete packet;
+
     return ret;
 }
+

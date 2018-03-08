@@ -16,10 +16,10 @@ int main(int argc, char *argv[])
 {
     char filename[] = "/home/vcloud/resources/av/demo.ts";
 
-    TS ts;
-    TSPacket packet;
+    TSParser ts;
     uint8_t buffer[TS_PACKET_LENGTH];
     BitReader reader;
+    TSPacket packet;
     FILE* fp_in = fopen(filename,"rb");
     while(!feof(fp_in)){
         int len = fread(buffer,1,TS_PACKET_LENGTH,fp_in);
@@ -27,10 +27,6 @@ int main(int argc, char *argv[])
             break;
         }
         bitreader_init(&reader,buffer,TS_PACKET_LENGTH);
-        ParsePacket(&ts,&reader);
+        ParsePacket(&ts,&reader,&packet);
     }
-
-
-
-
 }
