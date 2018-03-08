@@ -14,7 +14,7 @@ using namespace std;
 
 int main(int argc, char *argv[])
 {
-    char filename[] = "/home/vcloud/resources/av/demo.ts";
+    char filename[] = "/home/mbs/Videos/demo.ts";
 
     TSParser ts;
     uint8_t buffer[TS_PACKET_LENGTH];

@@ -29,7 +29,7 @@ void DumpPAT(PAT& pat){
     LOG("  last_section_number = %u\n", pat.last_section_number);
     for (size_t i = 0; i < pat.nloops.size(); ++i)
     {
-        PATLoopInfo* info = pat.nloops[i];
+        PAT::PATLoopInfo* info = pat.nloops[i];
         LOG("    program_number = %u\n", info->program_number);
         LOG("    reserved = %u\n", info->reserved);
         LOG("    PID = 0x%04x\n", info->pid);
@@ -56,7 +56,7 @@ void DumpPMT(PMT& pmt){
     size_t i = 0;
     for (i = 0; i < pmt.nloops.size();++i)
     {
-        PMTLoopInfo* info = pmt.nloops[i];
+        PMT::PMTLoopInfo* info = pmt.nloops[i];
         LOG("    stream_type = 0x%02x\n", info->stream_type);
         LOG("    reserved = %u\n", info->reserved);
         LOG("    elementary_PID = 0x%04x\n", info->elementary_pid);
@@ -137,8 +137,7 @@ bool TSParser::parse_pat(BitReader* reader){
 
     for (i = 0; i < numProgramBytes / 4; ++i)
     {
-        PATLoopInfo* info = new PATLoopInfo;
-        pat.nloops.push_back(info);
+        PAT::PATLoopInfo* info = new PAT::PATLoopInfo;
         info->program_number = get_bits(reader, 16);
         info->reserved = get_bits(reader, 3);
         info->pid = get_bits(reader, 13);
@@ -149,9 +148,10 @@ bool TSParser::parse_pat(BitReader* reader){
         else
         {
 			// pat里面包含了PMT（program map table）的信息
+            // 也就是说PMT和grogram是一一对应的
             unsigned programMapPID = info->pid;
             // 新增一个program
-            add_program(programMapPID);
+            add_program(info->program_number,programMapPID);
         }
     }
 
@@ -161,7 +161,11 @@ bool TSParser::parse_pat(BitReader* reader){
     //LOG("-----PAT Head end-----\n");
 }
 
+/*
+ * PMT中包含了流（对应PES）的信息（主要是PID，其他详细的PES信息在后面的包中传输），一个节目可以包含多个流
+ */
 bool TSParser::parse_pmt(TSProgram *program, BitReader* reader){
+    PMT& pmt = program->pmt;
     pmt.table_id = get_bits(reader, 8);
     pmt.section_syntax_indicator = get_bits(reader, 1);
     pmt.zero_byte = get_bits(reader,1);
@@ -187,7 +191,7 @@ bool TSParser::parse_pmt(TSProgram *program, BitReader* reader){
 
     while (infoBytesRemaining > 0)
     {
-        PMTLoopInfo* info = new PMTLoopInfo;
+        PMT::PMTLoopInfo* info = new PMT::PMTLoopInfo;
         pmt.nloops.push_back(info);
         info->stream_type = get_bits(reader, 8);
         info->reserved = get_bits(reader, 3);
@@ -231,7 +235,7 @@ bool TSParser::parse_payload(BitReader* reader,uint32_t pid, uint32_t payload_un
         return parse_pat(reader);
     }
 
-	// pid不等于0,意味着明确地指定了一个program，那么应该找到对应的program
+    // pid不等于0,意味着明确地指定了一个program或者stream的PID
     bool ret = false;
     for(int i = 0; i < programs.size(); ++i){
         TSProgram* program = programs[i];
@@ -239,6 +243,12 @@ bool TSParser::parse_payload(BitReader* reader,uint32_t pid, uint32_t payload_un
             continue;
         }
 
+        /*
+         * 如果指明了PMT的PID（注意不是program number）
+         * 那么表示这个包传输的是PMT的信息
+         * PMT包含了PES的PID
+         * 解析PMT的时候可以把流加上
+         */
         if(program->program_map_pid == pid){
             if(payload_unit_start_indicator){
                 uint32_t skips = get_bits(reader,8);
@@ -248,6 +258,11 @@ bool TSParser::parse_payload(BitReader* reader,uint32_t pid, uint32_t payload_un
             handle = 1;
             break;
         }
+        /*
+         * 如果不是PMT的id，那么判断是不是stream的pid
+         * stream在解析PMT的时候就已经增加了
+         * 如果是流的pid，那么解析PES或者流数据
+         */
         else{
             TSStream* stream = program->find_stream(pid);
             if(stream == NULL){
@@ -265,6 +280,8 @@ bool TSParser::parse_payload(BitReader* reader,uint32_t pid, uint32_t payload_un
 bool TSParser::parse_stream(TSStream *stream, uint32_t payload_unit_start_indicator, BitReader* reader){
     size_t payloadSizeBits;
     // 出现新的PES
+    // 这段的逻辑是，把payload先全部存起来，直到遇见下一段payload
+    // 然后才开始解析当前的payload
     if(payload_unit_start_indicator)
     {
         if(stream->payload_started)
@@ -279,13 +296,18 @@ bool TSParser::parse_stream(TSStream *stream, uint32_t payload_unit_start_indica
         return false;
     }
 
+    if(payload_unit_start_indicator){
+        //flush_stream_data(stream);
+    }
+
     payloadSizeBits = bitreader_size(reader);
 
     stream->push_data(bitreader_data(reader), payloadSizeBits / 8);
 }
 
 bool TSParser::parse_pes(TSStream *stream, BitReader* reader){
-    PES pes;
+    PES& pes = stream->pes;
+
     pes.packet_startcode_prefix = get_bits(reader, 24);
     pes.stream_id = get_bits(reader, 8);
     pes.PES_packet_length = get_bits(reader, 16);

@@ -13,6 +13,25 @@
 using namespace std;
 #include "bitreader.h"
 
+/*
+ * PAT中包含了program（节目）的编号（program number）以及对应的PMT的PID，
+ * program和PMT是一一对应的，因此program number 和 PMT的PID也是一一对应的
+ * PMT就相当于program和节目元素之间的桥梁，
+ * 通过program number可以找到PMT的PID，也就找到了PMT的信息
+ * 可以这样认为：program number是对外的（针对用户），而PMT的PID是对内的
+ * ts的包中传输的都是pid（可能是program的pid，也可能是stream的pid）
+ *
+ * 例如有一个包，我们解析出它的pid
+ * 1、如果这个pid等于某个PMT的pid，那么表示这个包携带了PMT的信息，
+ * 我们应该解析这个PMT，并更新它
+ * 2、如果这个pid不等于program的pid，那么我们应该看它是不是program中某一个流的pid，如果是
+ * 我们就应该解析它
+ *
+ * program可以包含多个流，例如音频流、视频流、字幕流等等
+ * ES（Elementary stream）就是基本的音视频流
+ * PES是ES加上头部之后的数据
+ * PS（program stream）就是多个PES复合而成的
+ */
 enum TSEnum{
     TS_PACKET_LENGTH  =188,
     TS_STREAM_VIDEO	 = 0x1b,
@@ -23,6 +42,7 @@ enum TSEnum{
 struct TS;
 struct TSStream;
 struct TSProgram;
+struct TSPacket;
 
 struct AdaptationField{
     uint32_t adaptation_field_length;
@@ -56,13 +76,17 @@ struct TSPacket{
     AdaptationField adaptation_field;
 };
 
-struct PATLoopInfo{
-    uint32_t program_number;
-    uint32_t reserved;
-    uint32_t pid;// network_pid or program_map_pid
-};
+
 
 struct PAT{ // Program Association Table
+
+    // 这是PAT中携带的与节目、PMT相关的信息
+    struct PATLoopInfo{
+        uint32_t program_number;
+        uint32_t reserved;
+        uint32_t pid;// network_pid or program_map_pid
+    };
+
     uint32_t table_id;
     uint32_t section_syntax_indicator;
     uint32_t zero_byte;
@@ -76,17 +100,22 @@ struct PAT{ // Program Association Table
     uint32_t last_section_number;
     deque<PATLoopInfo*> nloops;
     uint32_t crc;
+
+
 };
 
-struct PMTLoopInfo{
-    uint32_t stream_type;
-    uint32_t reserved;
-    uint32_t elementary_pid;
-    uint32_t reserved2;
-    uint32_t es_info_lenght;
-};
 
 struct PMT{ // program map table
+
+    // 这是PMT中携带的，与PES、流相关的信息
+    struct PMTLoopInfo{
+        uint32_t stream_type;
+        uint32_t reserved;
+        uint32_t elementary_pid;
+        uint32_t reserved2;
+        uint32_t es_info_lenght;
+    };
+
     uint32_t table_id;
     uint32_t section_syntax_indicator;
     uint32_t zero_byte;
@@ -105,6 +134,8 @@ struct PMT{ // program map table
     string descriptors;// skip
     deque<PMTLoopInfo*> nloops;
     uint32_t crc;
+
+
 };
 
 struct PESOptional{
@@ -137,6 +168,7 @@ struct PES{
 struct TSProgram;
 struct TSStream{
     TSProgram* program;
+    PES pes;
     uint32_t stream_type;
     uint32_t elementary_pid;
     uint32_t payload_started;
@@ -174,7 +206,9 @@ struct TSStream{
 };
 
 struct TSProgram{
+    uint32_t program_number;
     uint32_t program_map_pid;
+    PMT pmt;
     uint64_t first_pts;
     int first_pts_valid;
     deque<TSStream*> streams;
@@ -186,6 +220,11 @@ struct TSProgram{
     }
 
     ~TSProgram(){
+        for(size_t i = 0; i < pmt.nloops.size(); ++i){
+            PMT::PMTLoopInfo* info = pmt.nloops[i];
+            delete info;
+        }
+
         for(size_t i = 0; i < streams.size(); ++i){
             TSStream* s = streams[i];
             delete s;
@@ -223,7 +262,6 @@ typedef void (*UnpackDataCallback)(TSStream*, uint32_t PTS_DTS_flag,
 
 struct TSParser{
     PAT pat;
-    PMT pmt;
     deque<TSProgram*> programs;
 
     UnpackDataCallback unpack_data_callback;
@@ -241,14 +279,11 @@ struct TSParser{
         size_t i = 0;
 
         for(i = 0; i < pat.nloops.size(); ++i){
-            PATLoopInfo* info = pat.nloops[i];
+            PAT::PATLoopInfo* info = pat.nloops[i];
             delete info;
         }
 
-        for(i = 0; i < pmt.nloops.size(); ++i){
-            PMTLoopInfo* info = pmt.nloops[i];
-            delete info;
-        }
+
 
         for(i = 0; i < programs.size(); ++i){
             TSProgram* program = programs[i];
@@ -267,8 +302,9 @@ struct TSParser{
     }
 
     // 新增一个program
-    void add_program(uint32_t programMapPID){
+    void add_program(uint32_t program_number,uint32_t programMapPID){
         TSProgram* program = new TSProgram;
+        program->program_number = program_number;
         program->program_map_pid = programMapPID;
         programs.push_back(program);
     }
